@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   mcp-server:
-    image: tolak/supabase-mcp-server:v0.1.1
+    image: tolak/supabase-mcp-server:v0.1.2
     ports:
       - "3000:3000"
     environment:

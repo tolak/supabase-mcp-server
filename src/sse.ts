@@ -36,12 +36,7 @@ class SupabaseMcpServer {
 
     app.get("/sse", async (req: Request, res: Response) => {
       Logger.log("New SSE connection established");
-      
-      // Set SSE headers
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      
+
       // Create new transport for this connection
       this.sseTransport = new SSEServerTransport(
         "/messages",
