@@ -12,45 +12,42 @@ const Logger = {
 };
 
 async function main() {
+  // Check environment variable for access token
+  const accessToken = env.SUPABASE_ACCESS_TOKEN;
+
+  if (!accessToken) {
+    Logger.error(
+      'Please provide a personal access token (PAT) through SUPABASE_ACCESS_TOKEN environment variable'
+    );
+    exit(1);
+  }
+
+  // Create the Supabase MCP server
+  const server = createSupabaseMcpServer({
+    platform: {
+      accessToken,
+      apiUrl: 'https://api.supabase.com',
+    },
+  });
+
   const app = express();
 
   // Following the example code structure for session management
   const transports: {[sessionId: string]: SSEServerTransport} = {};
-  const servers: {[sessionId: string]: ReturnType<typeof createSupabaseMcpServer>} = {};
 
-  app.get("/sse", async (req: Request, res: Response) => {
+  app.get("/sse", async (_: Request, res: Response) => {
     Logger.log("New SSE connection established");
-    
-    // Get access token from request header
-    const accessToken = req.headers['x-supabase-access-token'] as string;
-    
-    if (!accessToken) {
-      Logger.error('No access token provided in request headers');
-      res.status(401).send('Access token required');
-      return;
-    }
-
-    // Create a new server instance for this session
-    const server = createSupabaseMcpServer({
-      platform: {
-        accessToken,
-        apiUrl: 'https://api.supabase.com',
-      },
-    });
     
     const transport = new SSEServerTransport(
       '/messages',
       res as unknown as ServerResponse<IncomingMessage>
     );
     
-    // Store both transport and server for this session
     transports[transport.sessionId] = transport;
-    servers[transport.sessionId] = server;
     
     res.on('close', () => {
       Logger.log(`Connection closed for session ${transport.sessionId}`);
       delete transports[transport.sessionId];
-      delete servers[transport.sessionId];
     });
 
     await server.connect(transport);
