@@ -1,113 +1,76 @@
 #!/usr/bin/env node
 
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { parseArgs } from 'node:util';
 import { createSupabaseMcpServer } from './server.js';
 import { env, exit } from 'node:process';
 import express, { Request, Response } from 'express';
 import { IncomingMessage, ServerResponse } from 'node:http';
-import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
-export const Logger = {
+const Logger = {
   log: console.log,
   error: console.error,
 };
 
-class SupabaseMcpServer {
-  private readonly server;
-  private sseTransport: SSEServerTransport | null = null;
+async function main() {
+  const app = express();
 
-  constructor(accessToken: string, apiUrl?: string) {
-    this.server = createSupabaseMcpServer({
+  // Following the example code structure for session management
+  const transports: {[sessionId: string]: SSEServerTransport} = {};
+  const servers: {[sessionId: string]: ReturnType<typeof createSupabaseMcpServer>} = {};
+
+  app.get("/sse", async (req: Request, res: Response) => {
+    Logger.log("New SSE connection established");
+    
+    // Get access token from request header
+    const accessToken = req.headers['x-supabase-access-token'] as string;
+    
+    if (!accessToken) {
+      Logger.error('No access token provided in request headers');
+      res.status(401).send('Access token required');
+      return;
+    }
+
+    // Create a new server instance for this session
+    const server = createSupabaseMcpServer({
       platform: {
         accessToken,
-        apiUrl,
+        apiUrl: 'https://api.supabase.com',
       },
     });
-  }
-
-  async connect(transport: Transport): Promise<void> {
-    await this.server.connect(transport);
-    Logger.log("Server connected and ready to process requests");
-  }
-
-  async startHttpServer(port: number, host: string): Promise<void> {
-    const app = express();
-
-    app.get("/sse", async (req: Request, res: Response) => {
-      Logger.log("New SSE connection established");
-
-      // Create new transport for this connection
-      this.sseTransport = new SSEServerTransport(
-        "/messages",
-        res as unknown as ServerResponse<IncomingMessage>,
-      );
-      
-      // Connect the server to this transport
-      await this.connect(this.sseTransport);
-
-      // Clean up on client disconnect
-      req.on('close', () => {
-        this.sseTransport = null;
-      });
+    
+    const transport = new SSEServerTransport(
+      '/messages',
+      res as unknown as ServerResponse<IncomingMessage>
+    );
+    
+    // Store both transport and server for this session
+    transports[transport.sessionId] = transport;
+    servers[transport.sessionId] = server;
+    
+    res.on('close', () => {
+      Logger.log(`Connection closed for session ${transport.sessionId}`);
+      delete transports[transport.sessionId];
+      delete servers[transport.sessionId];
     });
 
-    app.post("/messages", async (req: Request, res: Response) => {
-      if (!this.sseTransport) {
-        res.sendStatus(400);
-        return;
-      }
-      await this.sseTransport.handlePostMessage(
-        req as unknown as IncomingMessage,
-        res as unknown as ServerResponse<IncomingMessage>,
-      );
-    });
-
-    app.listen(port, host === 'localhost' ? '0.0.0.0' : host, () => {
-      Logger.log(`HTTP server listening on port ${port}`);
-      Logger.log(`SSE endpoint available at http://${host}:${port}/sse`);
-      Logger.log(`Message endpoint available at http://${host}:${port}/messages`);
-    });
-  }
-}
-
-async function main() {
-  const {
-    values: { 
-      ['access-token']: cliAccessToken, 
-      ['api-url']: apiUrl,
-      ['port']: port = '3000',
-      ['host']: host = 'localhost'
-    },
-  } = parseArgs({
-    options: {
-      ['access-token']: {
-        type: 'string',
-      },
-      ['api-url']: {
-        type: 'string',
-      },
-      ['port']: {
-        type: 'string',
-      },
-      ['host']: {
-        type: 'string',
-      },
-    },
+    await server.connect(transport);
   });
 
-  // Check environment variable first, then fall back to CLI argument
-  const accessToken = env.SUPABASE_ACCESS_TOKEN || cliAccessToken;
+  app.post("/messages", async (req: Request, res: Response) => {
+    const sessionId = req.query.sessionId as string;
+    const transport = transports[sessionId];
+    
+    if (transport) {
+      await transport.handlePostMessage(
+        req as unknown as IncomingMessage,
+        res as unknown as ServerResponse<IncomingMessage>
+      );
+    } else {
+      res.status(400).send('No transport found for sessionId');
+    }
+  });
 
-  if (!accessToken) {
-    console.error(
-      'Please provide a personal access token (PAT) either through SUPABASE_ACCESS_TOKEN environment variable or --access-token flag'
-    );
-    exit(1);
-  }
-
-  const mcpServer = new SupabaseMcpServer(accessToken, apiUrl);
-  await mcpServer.startHttpServer(parseInt(port, 10), host);
+  app.listen(3000);
 }
 
 main().catch(Logger.error);
